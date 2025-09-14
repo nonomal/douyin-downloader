@@ -39,6 +39,16 @@ except ImportError as e:
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 配置日志（需要在导入模块之前）
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('downloader_v2.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # 导入项目模块
 from apiproxy.douyin import douyin_headers
 from apiproxy.douyin.urls import Urls
@@ -48,17 +58,16 @@ from apiproxy.douyin.auth.cookie_manager import AutoCookieManager
 from apiproxy.douyin.auth.signature_generator import get_x_bogus, get_a_bogus
 from apiproxy.douyin.database import DataBase
 from apiproxy.douyin.core.download_logger import DownloadLogger
-from apiproxy.douyin.auth.browser_cookies import get_browser_cookies
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('downloader_v2.log', encoding='utf-8')
-    ]
-)
-logger = logging.getLogger(__name__)
+# 尝试导入browser_cookies，如果失败则设置为None
+try:
+    from apiproxy.douyin.auth.browser_cookies import get_browser_cookies
+    HAS_BROWSER_COOKIES = True
+except (ImportError, OSError) as e:
+    logger.warning(f"无法导入browser_cookies模块: {e}")
+    logger.warning("浏览器Cookie提取功能不可用")
+    HAS_BROWSER_COOKIES = False
+    get_browser_cookies = None
 
 # 控制台日志级别设置为WARNING，减少干扰
 for handler in logging.root.handlers:
@@ -77,7 +86,6 @@ class URLExtractor:
         'video': [
             r'https?://(?:www\.)?douyin\.com/video/(\d+)',
             r'https?://(?:www\.)?douyin\.com/note/(\d+)',
-            r'https?://v\.douyin\.com/([a-zA-Z0-9]+)',
             r'https?://(?:www\.)?iesdouyin\.com/share/video/(\d+)',
         ],
         'user': [
@@ -152,10 +160,15 @@ class URLExtractor:
     def extract_id_from_share_text(cls, text: str) -> Optional[str]:
         """从分享文本中提取ID（处理复制的口令）"""
         # 匹配形如 "8.43 abc:/ 复制打开抖音" 的格式
-        pattern = r'[\d.]+\s*([a-zA-Z0-9]+):/'
+        # 需要匹配完整的短链接ID，不只是前几个字符
+        pattern = r'([a-zA-Z0-9]+):/'
         match = re.search(pattern, text)
         if match:
-            return match.group(1)
+            # 返回完整的ID
+            full_id = match.group(1)
+            # 验证ID长度（通常是10-15个字符）
+            if len(full_id) >= 10:
+                return full_id
 
         # 匹配抖音号
         pattern = r'@([a-zA-Z0-9_]+)'
@@ -199,6 +212,11 @@ class CookieHelper:
                 choices=["chrome", "edge", "firefox", "brave"],
                 default="chrome"
             )
+
+            if not HAS_BROWSER_COOKIES:
+                console.print("[red]浏览器Cookie提取功能不可用（Cryptodome模块问题）[/red]")
+                console.print("[yellow]请使用其他方式或手动输入Cookie[/yellow]")
+                return None
 
             try:
                 console.print(f"[cyan]正在从{browser}提取Cookie...[/cyan]")
@@ -267,9 +285,9 @@ class CookieHelper:
 class EnhancedDownloader:
     """增强版下载器"""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = "config_downloader.yml"):
         """初始化下载器"""
-        self.config = self._load_config(config_path) if config_path else {}
+        self.config = self._load_config(config_path)
         self.urls_helper = Urls()
         self.result_helper = Result()
         self.utils = Utils()
@@ -282,10 +300,14 @@ class EnhancedDownloader:
         self.mstoken = self._generate_mstoken()
         self.device_id = self._generate_device_id()
 
-        # Cookie管理
-        self.cookies = None
+        # Cookie管理 - 从配置文件读取
+        self.cookies = self.config.get('cookies') if 'cookies' in self.config else self.config.get('cookie')
         self.headers = {**douyin_headers}
         self.headers['accept-encoding'] = 'gzip, deflate'
+
+        # 如果配置了Cookie，立即设置
+        if self.cookies:
+            self._apply_cookies_to_headers()
 
         # 数据库和日志
         self.enable_database = bool(self.config.get('database', True))
@@ -313,10 +335,13 @@ class EnhancedDownloader:
     def _load_config(self, config_path: str) -> Dict:
         """加载配置文件"""
         if not os.path.exists(config_path):
+            logger.warning(f"配置文件 {config_path} 不存在，使用默认配置")
             return {}
 
         with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
+            config = yaml.safe_load(f) or {}
+            logger.info(f"加载配置文件: {config_path}")
+            return config
 
     def _generate_mstoken(self) -> str:
         """生成msToken"""
@@ -335,32 +360,70 @@ class EnhancedDownloader:
         logger.info(f"生成设备ID: {device_id}")
         return device_id
 
-    async def initialize_cookies(self, cookies=None):
-        """初始化Cookie"""
-        if cookies:
-            self.cookies = cookies
-        else:
-            # 尝试从配置获取
-            self.cookies = self.config.get('cookies') or self.config.get('cookie')
-
-        # 构建Cookie字符串
+    def _apply_cookies_to_headers(self):
+        """应用Cookie到请求头"""
         cookie_str = self._build_cookie_string()
         if cookie_str:
+            # 确保cookie字符串可以被latin-1编码
+            try:
+                cookie_str.encode('latin-1')
+            except UnicodeEncodeError:
+                logger.warning("Cookie包含非ASCII字符，正在进行安全编码...")
+                # 重新构建安全的cookie字符串
+                cookie_str = self._build_cookie_string()
+
             self.headers['Cookie'] = cookie_str
             # 更新全局headers
             from apiproxy.douyin import douyin_headers
             douyin_headers['Cookie'] = cookie_str
+            logger.info("Cookie已设置")
 
+    async def initialize_cookies(self, cookies=None):
+        """初始化Cookie"""
+        if cookies:
+            self.cookies = cookies
+            self._apply_cookies_to_headers()
             console.print("[green]✅ Cookie设置成功[/green]")
+        elif not self.cookies:
+            # 如果没有配置Cookie，尝试从配置获取
+            self.cookies = self.config.get('cookies') or self.config.get('cookie')
+            if self.cookies:
+                self._apply_cookies_to_headers()
+                console.print("[green]✅ Cookie从配置文件加载成功[/green]")
 
     def _build_cookie_string(self) -> str:
         """构建Cookie字符串"""
+        def safe_encode(value):
+            """安全编码cookie值，处理非ASCII字符"""
+            if not value:
+                return ''
+            # 将字符串转换为UTF-8编码，然后转换为ASCII安全的字符串
+            if isinstance(value, str):
+                try:
+                    # 尝试使用latin-1编码
+                    value.encode('latin-1')
+                    return value
+                except UnicodeEncodeError:
+                    # 如果包含非ASCII字符，使用URL编码
+                    import urllib.parse
+                    return urllib.parse.quote(value, safe='')
+            return str(value)
+
         if isinstance(self.cookies, str):
-            return self.cookies
+            # 处理字符串形式的cookies
+            cookie_pairs = []
+            for pair in self.cookies.split(';'):
+                pair = pair.strip()
+                if '=' in pair:
+                    key, value = pair.split('=', 1)
+                    cookie_pairs.append(f'{key.strip()}={safe_encode(value.strip())}')
+                elif pair:
+                    cookie_pairs.append(pair)
+            return '; '.join(cookie_pairs)
         elif isinstance(self.cookies, dict):
-            return '; '.join([f'{k}={v}' for k, v in self.cookies.items()])
+            return '; '.join([f'{k}={safe_encode(v)}' for k, v in self.cookies.items()])
         elif isinstance(self.cookies, list):
-            kv = {c.get('name'): c.get('value') for c in self.cookies if c.get('name') and c.get('value')}
+            kv = {c.get('name'): safe_encode(c.get('value')) for c in self.cookies if c.get('name') and c.get('value')}
             return '; '.join([f'{k}={v}' for k, v in kv.items()])
         return ''
 
@@ -375,7 +438,7 @@ class EnhancedDownloader:
                 share_id = self.url_extractor.extract_id_from_share_text(url)
                 if share_id:
                     # 构造为短链接
-                    url = f"https://v.douyin.com/{share_id}"
+                    url = f"https://v.douyin.com/{share_id}/"
                     url_info = {'url': url, 'type': 'short', 'id': share_id}
                 else:
                     logger.error(f"无法识别的URL格式: {url}")
@@ -452,6 +515,10 @@ class EnhancedDownloader:
                         elif '/video/' in location or '/note/' in location:
                             logger.info(f"解析短链接成功: {url} -> {location}")
                             return location
+                        elif '/user/' in location or 'sec_uid=' in location:
+                            # 处理用户主页链接
+                            logger.info(f"解析短链接成功（用户主页）: {url} -> {location}")
+                            return location
                         elif 'modal_id=' in location:
                             # 从modal_id提取
                             modal_match = re.search(r'modal_id=(\d+)', location)
@@ -469,6 +536,11 @@ class EnhancedDownloader:
                 else:
                     # 最终URL
                     final_url = response.url if hasattr(response, 'url') else current_url
+
+                    # 检查最终URL是否是用户主页
+                    if '/user/' in final_url or 'sec_uid=' in final_url:
+                        logger.info(f"解析短链接成功（最终用户主页）: {url} -> {final_url}")
+                        return final_url
 
                     # 尝试从页面内容提取
                     if response.text:
@@ -577,6 +649,11 @@ class EnhancedDownloader:
                 cookie_str = self._build_cookie_string()
                 if cookie_str:
                     from apiproxy.douyin import douyin_headers
+                    # 确保cookie字符串可以被latin-1编码
+                    try:
+                        cookie_str.encode('latin-1')
+                    except UnicodeEncodeError:
+                        logger.warning("Cookie包含非ASCII字符，已进行安全编码")
                     douyin_headers['Cookie'] = cookie_str
 
             result = dy.getAwemeInfo(video_id)
@@ -598,6 +675,11 @@ class EnhancedDownloader:
                 cookie_str = self._build_cookie_string()
                 if cookie_str and 'msToken=' not in cookie_str:
                     cookie_str += f'; msToken={self.mstoken}'
+                # 确保cookie字符串可以被latin-1编码
+                try:
+                    cookie_str.encode('latin-1')
+                except UnicodeEncodeError:
+                    logger.warning("Cookie包含非ASCII字符，已进行安全编码")
                 headers['Cookie'] = cookie_str
 
             async with aiohttp.ClientSession() as session:
@@ -847,10 +929,243 @@ class EnhancedDownloader:
             return False
 
     async def download_user_page(self, url: str, user_id: str = None) -> bool:
-        """下载用户主页"""
-        # 简化实现，具体逻辑参考原版
-        console.print("[yellow]用户主页批量下载功能开发中...[/yellow]")
-        return True
+        """下载用户主页作品"""
+        try:
+            console.print("[cyan]正在获取用户信息...[/cyan]")
+
+            # 优先使用传入的user_id参数
+            sec_uid = user_id
+
+            # 如果没有传入user_id，则从URL解析
+            if not sec_uid:
+                # 如果是短链接，先获取重定向后的URL
+                if 'v.douyin.com' in url:
+                    resolved_url = await self.resolve_short_url(url)
+                    url = resolved_url
+
+                # 从URL提取sec_uid
+                import re
+                patterns = [
+                    r'sec_uid=([\w-]+)',
+                    r'/user/([\w-]+)',
+                    r'/share/user/([\w-]+)'
+                ]
+
+                for pattern in patterns:
+                    match = re.search(pattern, url)
+                    if match:
+                        sec_uid = match.group(1)
+                        break
+
+                if not sec_uid:
+                    logger.error(f"无法从URL提取用户ID: {url}")
+                    return False
+
+            console.print(f"[green]用户ID: {sec_uid}[/green]")
+
+            # 获取用户作品列表
+            videos = await self._get_user_posts(sec_uid)
+
+            if not videos:
+                console.print("[yellow]未找到用户作品[/yellow]")
+                return False
+
+            console.print(f"[green]找到 {len(videos)} 个作品[/green]")
+
+            # 询问下载数量
+            max_count = min(len(videos), 10)  # 默认最多下载10个
+            console.print(f"\n[cyan]准备下载前 {max_count} 个作品[/cyan]")
+
+            # 创建进度条
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=40),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+
+                task = progress.add_task(
+                    f"下载用户作品 [0/{max_count}]",
+                    total=max_count
+                )
+
+                success_count = 0
+                for i, video_info in enumerate(videos[:max_count], 1):
+                    progress.update(task, description=f"下载用户作品 [{i}/{max_count}]")
+
+                    # 直接使用已获取的视频信息下载，不再调用单个视频API
+                    if video_info and isinstance(video_info, dict):
+                        # 更新进度
+                        desc = video_info.get('desc', '无标题')[:30]
+                        media_type = '图文' if video_info.get('images') else '视频'
+                        progress.update(task, description=f"[cyan]下载{media_type}: {desc}[/cyan]")
+
+                        # 直接下载媒体文件
+                        success = await self._download_media_files(video_info)
+                        if success:
+                            success_count += 1
+                            video_id = video_info.get('aweme_id', 'unknown')
+                            logger.info(f"成功下载视频: {video_id}")
+                            self.stats['success'] += 1
+                        else:
+                            self.stats['failed'] += 1
+                    else:
+                        # 如果视频信息无效，尝试使用旧方法
+                        video_id = video_info.get('aweme_id') or video_info.get('video_id')
+                        if video_id:
+                            video_url = f"https://www.douyin.com/video/{video_id}"
+                            success = await self.download_single_video(video_url, video_id)
+                            if success:
+                                success_count += 1
+
+                    progress.update(task, completed=i)
+                    self.stats['total'] += 1
+
+                    # 速率限制
+                    await self.rate_limiter.acquire()
+
+            console.print(f"\n[green]✅ 成功下载 {success_count}/{max_count} 个作品[/green]")
+            return success_count > 0
+
+        except Exception as e:
+            logger.error(f"下载用户页面失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def _get_user_posts(self, sec_uid: str, max_count: int = 50) -> List[Dict]:
+        """获取用户作品列表"""
+        try:
+            # 构建API参数
+            params = [
+                f'sec_uid={sec_uid}',
+                'count=20',
+                'max_cursor=0',
+                'aid=6383',
+                'device_platform=webapp',
+                'channel=channel_pc_web',
+                'pc_client_type=1',
+                'version_code=170400',
+                'version_name=17.4.0',
+                'cookie_enabled=true',
+                'screen_width=1920',
+                'screen_height=1080',
+                'browser_language=zh-CN',
+                'browser_platform=MacIntel',
+                'browser_name=Chrome',
+                'browser_version=122.0.0.0',
+                'browser_online=true',
+                f'msToken={self.mstoken}',
+            ]
+
+            params_str = '&'.join(params)
+
+            # 生成X-Bogus签名
+            from apiproxy.douyin.auth.signature_generator import get_x_bogus
+            x_bogus = get_x_bogus(params_str, self.headers.get('User-Agent'))
+
+            # 构建完整URL
+            api_url = f"https://www.douyin.com/aweme/v1/web/aweme/post/?{params_str}&X-Bogus={x_bogus}"
+
+            # 设置headers - 重要：不包含sessionid，避免返回登录用户的作品
+            headers = {**self.headers}
+            if self.cookies:
+                cookie_str = self._build_cookie_string()
+                if cookie_str:
+                    # 移除所有session相关的cookie，只保留其他必要的cookie
+                    # session相关的cookie会导致API返回登录用户的作品而不是请求的用户
+                    cookie_parts = []
+                    session_keywords = ['sessionid', 'sid_guard', 'sid_tt', 'uid_tt']
+                    for part in cookie_str.split(';'):
+                        part = part.strip()
+                        if part:
+                            # 检查是否包含session相关的关键词
+                            is_session_cookie = False
+                            for keyword in session_keywords:
+                                if part.startswith(keyword + '=') or part.startswith(keyword + '_'):
+                                    is_session_cookie = True
+                                    break
+
+                            if not is_session_cookie:
+                                cookie_parts.append(part)
+
+                    filtered_cookie_str = '; '.join(cookie_parts)
+
+                    # 确保cookie字符串可以被latin-1编码
+                    try:
+                        filtered_cookie_str.encode('latin-1')
+                    except UnicodeEncodeError:
+                        logger.warning("Cookie包含非ASCII字符，已进行安全编码")
+
+                    if filtered_cookie_str:
+                        headers['Cookie'] = filtered_cookie_str
+                        logger.info(f"请求用户作品时使用过滤后的Cookie（移除了sessionid）")
+
+            # 请求API
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, headers=headers, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if data and 'aweme_list' in data:
+                            logger.info(f"获取到 {len(data['aweme_list'])} 个作品")
+                            return data['aweme_list']
+                        elif data:
+                            logger.warning(f"API返回格式异常: {data}")
+                        else:
+                            logger.warning("API返回空数据")
+                    else:
+                        logger.error(f"API请求失败，状态码: {response.status}")
+
+            # 备用方案：使用Douyin类
+            logger.info("尝试备用方案获取用户作品...")
+            from apiproxy.douyin.douyin import Douyin
+            dy = Douyin(database=False)
+
+            # 设置Cookie - 同样需要移除sessionid
+            if self.cookies:
+                cookie_str = self._build_cookie_string()
+                if cookie_str:
+                    # 移除所有session相关的cookie，避免返回登录用户的作品
+                    cookie_parts = []
+                    session_keywords = ['sessionid', 'sid_guard', 'sid_tt', 'uid_tt']
+                    for part in cookie_str.split(';'):
+                        part = part.strip()
+                        if part:
+                            # 检查是否包含session相关的关键词
+                            is_session_cookie = False
+                            for keyword in session_keywords:
+                                if part.startswith(keyword + '=') or part.startswith(keyword + '_'):
+                                    is_session_cookie = True
+                                    break
+
+                            if not is_session_cookie:
+                                cookie_parts.append(part)
+
+                    filtered_cookie_str = '; '.join(cookie_parts)
+
+                    from apiproxy.douyin import douyin_headers
+                    # 确保cookie字符串可以被latin-1编码
+                    try:
+                        filtered_cookie_str.encode('latin-1')
+                    except UnicodeEncodeError:
+                        logger.warning("Cookie包含非ASCII字符，已进行安全编码")
+
+                    if filtered_cookie_str:
+                        douyin_headers['Cookie'] = filtered_cookie_str
+                        logger.info(f"备用方案：使用过滤后的Cookie（移除了sessionid）")
+
+            # 获取用户作品
+            result = dy.getUserInfo(sec_uid, mode="post", count=max_count)
+            if result and isinstance(result, list):
+                return result
+
+        except Exception as e:
+            logger.error(f"获取用户作品失败: {e}")
+
+        return []
 
     async def download_mix(self, url: str, mix_id: str = None) -> bool:
         """下载合集"""
@@ -1018,7 +1333,8 @@ async def main():
 
     parser.add_argument(
         '-c', '--config',
-        help='配置文件路径'
+        default='config_downloader.yml',
+        help='配置文件路径 (默认: config_downloader.yml)'
     )
 
     parser.add_argument(
@@ -1072,9 +1388,13 @@ async def main():
             # 处理Cookie
             if args.cookie:
                 if args.cookie.startswith('browser:'):
-                    browser = args.cookie.split(':', 1)[1]
-                    cookies = get_browser_cookies(browser, '.douyin.com')
-                    await downloader.initialize_cookies(cookies)
+                    if not HAS_BROWSER_COOKIES:
+                        console.print("[red]浏览器Cookie提取功能不可用[/red]")
+                        console.print("[yellow]请使用配置文件中的Cookie或手动指定[/yellow]")
+                    else:
+                        browser = args.cookie.split(':', 1)[1]
+                        cookies = get_browser_cookies(browser, '.douyin.com')
+                        await downloader.initialize_cookies(cookies)
                 else:
                     await downloader.initialize_cookies(args.cookie)
 

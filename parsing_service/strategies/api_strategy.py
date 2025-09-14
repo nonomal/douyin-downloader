@@ -250,14 +250,66 @@ class APIStrategy(BaseStrategy):
             headers.update(options['headers'])
 
         # 添加Cookie
+        # 注意：当请求用户作品列表时，需要过滤session相关的cookie
+        # 否则API会返回登录用户的作品而不是请求用户的作品
         if options.get('cookies'):
+            # 判断是否是用户作品请求
+            is_user_request = options.get('request_type') == 'user_posts'
+
             if isinstance(options['cookies'], dict):
-                cookie_str = '; '.join([f"{k}={v}" for k, v in options['cookies'].items()])
+                if is_user_request:
+                    # 过滤session相关的cookie
+                    filtered_cookies = self._filter_session_cookies(options['cookies'])
+                    cookie_str = '; '.join([f"{k}={v}" for k, v in filtered_cookies.items()])
+                else:
+                    cookie_str = '; '.join([f"{k}={v}" for k, v in options['cookies'].items()])
                 headers['Cookie'] = cookie_str
             elif isinstance(options['cookies'], str):
-                headers['Cookie'] = options['cookies']
+                if is_user_request:
+                    # 过滤字符串形式的cookie
+                    headers['Cookie'] = self._filter_session_cookie_string(options['cookies'])
+                else:
+                    headers['Cookie'] = options['cookies']
 
         return headers
+
+    def _filter_session_cookies(self, cookies: Dict) -> Dict:
+        """过滤session相关的cookie"""
+        session_keywords = ['sessionid', 'sid_guard', 'sid_tt', 'uid_tt']
+        filtered = {}
+
+        for key, value in cookies.items():
+            # 检查是否是session相关的cookie
+            is_session = False
+            for keyword in session_keywords:
+                if key.startswith(keyword):
+                    is_session = True
+                    break
+
+            if not is_session:
+                filtered[key] = value
+
+        return filtered
+
+    def _filter_session_cookie_string(self, cookie_str: str) -> str:
+        """过滤字符串形式的session cookie"""
+        session_keywords = ['sessionid', 'sid_guard', 'sid_tt', 'uid_tt']
+        cookie_parts = []
+
+        for part in cookie_str.split(';'):
+            part = part.strip()
+            if part:
+                # 检查是否包含session相关的关键词
+                is_session_cookie = False
+                for keyword in session_keywords:
+                    if part.startswith(keyword + '=') or part.startswith(keyword + '_'):
+                        is_session_cookie = True
+                        break
+
+                if not is_session_cookie:
+                    cookie_parts.append(part)
+
+        return '; '.join(cookie_parts)
 
     def _validate_result(self, result: Dict) -> bool:
         """验证结果有效性"""

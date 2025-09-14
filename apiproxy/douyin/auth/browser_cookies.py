@@ -23,12 +23,19 @@ logger = logging.getLogger(__name__)
 
 # 尝试导入加密库
 try:
-    from Crypto.Cipher import AES
-    from Crypto.Protocol.KDF import PBKDF2
+    # 优先尝试 pycryptodomex (使用 Cryptodome 命名空间)
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Protocol.KDF import PBKDF2
     HAS_CRYPTO = True
 except ImportError:
-    HAS_CRYPTO = False
-    logger.warning("pycryptodome未安装，Cookie解密功能受限")
+    try:
+        # 降级到 pycryptodome (使用 Crypto 命名空间)
+        from Crypto.Cipher import AES
+        from Crypto.Protocol.KDF import PBKDF2
+        HAS_CRYPTO = True
+    except ImportError:
+        HAS_CRYPTO = False
+        logger.warning("pycryptodome未安装，Cookie解密功能受限")
 
 class BrowserCookieExtractor:
     """

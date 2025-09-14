@@ -61,7 +61,7 @@ douyin-downloader/
 # 安装基础依赖
 pip install requests
 
-# 下载单个视频
+# 下载视频
 python DouYinCommand.py https://v.douyin.com/xxxxx/
 ```
 
@@ -96,7 +96,7 @@ python downloader_v3.py https://v.douyin.com/xxxxx/
 - ✅ 无需配置，开箱即用
 - ✅ 代码简单，易于理解
 - ❌ 功能有限，成功率较低
-- ❌ 不支持批量下载
+
 
 **详细使用步骤**：
 
@@ -557,7 +557,7 @@ python test_with_signature.py
 | 功能 | V1 | V2 | V3 |
 |-----|----|----|-----|
 | 单视频下载 | ✅ | ✅ | ✅ |
-| 批量下载 | ❌ | ✅ | ✅ |
+| 批量下载 | ✅ | ✅ | ✅ |
 | Cookie管理 | ❌ | ✅ | ✅ |
 | 浏览器Cookie提取 | ❌ | ✅ | ❌ |
 | 交互模式 | ❌ | ✅ | ✅ |
