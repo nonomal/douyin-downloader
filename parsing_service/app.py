@@ -22,8 +22,9 @@ import os
 
 # 导入解析策略
 from strategies.api_strategy import APIStrategy
-from strategies.playwright_strategy import PlaywrightStrategy
-from strategies.selenium_strategy import SeleniumStrategy
+from strategies.enhanced_api_strategy import EnhancedAPIStrategy
+# from strategies.playwright_strategy import PlaywrightStrategy  # 暂时禁用，避免依赖问题
+# from strategies.selenium_strategy import SeleniumStrategy  # 暂时禁用，避免依赖问题
 from strategies.requests_strategy import RequestsStrategy
 from utils.cache_manager import CacheManager
 from utils.proxy_manager import ProxyManager
@@ -48,12 +49,18 @@ limiter = Limiter(
 )
 
 # Redis连接（用于缓存和分布式锁）
-redis_client = redis.Redis(
-    host=os.getenv('REDIS_HOST', 'localhost'),
-    port=int(os.getenv('REDIS_PORT', 6379)),
-    db=0,
-    decode_responses=True
-)
+try:
+    redis_client = redis.Redis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=0,
+        decode_responses=True
+    )
+    redis_client.ping()
+    logger.info("Redis连接成功")
+except:
+    logger.warning("Redis不可用，使用内存缓存")
+    redis_client = None
 
 # 初始化组件
 cache_manager = CacheManager(redis_client)
@@ -87,25 +94,25 @@ class ParsingService:
             'enabled': True
         })
 
-        # 策略2: Playwright浏览器自动化
-        if os.getenv('ENABLE_PLAYWRIGHT', 'true').lower() == 'true':
-            strategies.append({
-                'name': 'playwright',
-                'handler': PlaywrightStrategy(),
-                'priority': 2,
-                'timeout': 30,
-                'enabled': True
-            })
+        # 策略2: Playwright浏览器自动化（暂时禁用）
+        # if os.getenv('ENABLE_PLAYWRIGHT', 'true').lower() == 'true':
+        #     strategies.append({
+        #         'name': 'playwright',
+        #         'handler': PlaywrightStrategy(),
+        #         'priority': 2,
+        #         'timeout': 30,
+        #         'enabled': True
+        #     })
 
-        # 策略3: Selenium浏览器自动化
-        if os.getenv('ENABLE_SELENIUM', 'false').lower() == 'true':
-            strategies.append({
-                'name': 'selenium',
-                'handler': SeleniumStrategy(),
-                'priority': 3,
-                'timeout': 30,
-                'enabled': True
-            })
+        # 策略3: Selenium浏览器自动化（暂时禁用）
+        # if os.getenv('ENABLE_SELENIUM', 'false').lower() == 'true':
+        #     strategies.append({
+        #         'name': 'selenium',
+        #         'handler': SeleniumStrategy(),
+        #         'priority': 3,
+        #         'timeout': 30,
+        #         'enabled': True
+        #     })
 
         # 策略4: 简单requests请求
         strategies.append({
@@ -308,6 +315,9 @@ class ParsingService:
 # 创建解析服务实例
 parsing_service = ParsingService()
 
+# 创建增强API策略实例
+enhanced_api = EnhancedAPIStrategy()
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -436,6 +446,492 @@ def clear_cache():
 def metrics():
     """Prometheus指标端点"""
     return metrics_collector.export_prometheus(), 200, {'Content-Type': 'text/plain'}
+
+
+# ================== 新增API端点 ==================
+
+@app.route('/user/info', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_user_info():
+    """获取用户信息"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        result = await enhanced_api.get_user_info(user_id, data.get('options'))
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get user info'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get user info error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/user/posts', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_user_posts():
+    """获取用户作品列表"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        result = await enhanced_api.get_user_posts(
+            user_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get user posts'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get user posts error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/user/likes', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_user_likes():
+    """获取用户点赞作品列表"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        result = await enhanced_api.get_user_likes(
+            user_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get user likes'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get user likes error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/video/comments', methods=['POST'])
+@limiter.limit("30 per minute")
+async def get_video_comments():
+    """获取视频评论列表"""
+    try:
+        data = request.json
+        video_id = data.get('video_id')
+
+        if not video_id:
+            return jsonify({'error': 'video_id is required'}), 400
+
+        result = await enhanced_api.get_video_comments(
+            video_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get comments'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get comments error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/search', methods=['POST'])
+@limiter.limit("30 per minute")
+async def search():
+    """综合搜索"""
+    try:
+        data = request.json
+        keyword = data.get('keyword')
+
+        if not keyword:
+            return jsonify({'error': 'keyword is required'}), 400
+
+        search_type = data.get('type', 'general')  # general, video, user, live
+
+        if search_type == 'video':
+            result = await enhanced_api.search_videos(
+                keyword,
+                offset=data.get('offset', 0),
+                count=data.get('count', 20),
+                sort_type=data.get('sort_type', 0),
+                options=data.get('options')
+            )
+        elif search_type == 'user':
+            result = await enhanced_api.search_users(
+                keyword,
+                offset=data.get('offset', 0),
+                count=data.get('count', 20),
+                options=data.get('options')
+            )
+        elif search_type == 'live':
+            result = await enhanced_api.search_live_rooms(
+                keyword,
+                offset=data.get('offset', 0),
+                count=data.get('count', 20),
+                options=data.get('options')
+            )
+        else:
+            result = await enhanced_api.search_general(
+                keyword,
+                offset=data.get('offset', 0),
+                count=data.get('count', 20),
+                search_type=data.get('search_type', 0),
+                options=data.get('options')
+            )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Search failed'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/live/info', methods=['POST'])
+@limiter.limit("30 per minute")
+async def get_live_info():
+    """获取直播间信息"""
+    try:
+        data = request.json
+        room_id = data.get('room_id')
+
+        if not room_id:
+            return jsonify({'error': 'room_id is required'}), 400
+
+        result = await enhanced_api.get_live_room_info(
+            room_id,
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get live room info'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get live info error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/music/info', methods=['POST'])
+@limiter.limit("30 per minute")
+async def get_music_info():
+    """获取音乐信息"""
+    try:
+        data = request.json
+        music_id = data.get('music_id')
+
+        if not music_id:
+            return jsonify({'error': 'music_id is required'}), 400
+
+        result = await enhanced_api.get_music_info(
+            music_id,
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get music info'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get music info error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/music/videos', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_music_videos():
+    """获取音乐下的视频列表"""
+    try:
+        data = request.json
+        music_id = data.get('music_id')
+
+        if not music_id:
+            return jsonify({'error': 'music_id is required'}), 400
+
+        result = await enhanced_api.get_music_videos(
+            music_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get music videos'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get music videos error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/hot/search', methods=['GET'])
+@limiter.limit("60 per minute")
+async def get_hot_search():
+    """获取热搜榜"""
+    try:
+        result = await enhanced_api.get_hot_search()
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get hot search'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get hot search error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/suggest', methods=['POST'])
+@limiter.limit("60 per minute")
+async def get_suggest_words():
+    """获取搜索建议词"""
+    try:
+        data = request.json
+        keyword = data.get('keyword')
+
+        if not keyword:
+            return jsonify({'error': 'keyword is required'}), 400
+
+        result = await enhanced_api.get_suggest_words(
+            keyword,
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get suggestions'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get suggestions error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/related/videos', methods=['POST'])
+@limiter.limit("30 per minute")
+async def get_related_videos():
+    """获取相关推荐视频"""
+    try:
+        data = request.json
+        video_id = data.get('video_id')
+
+        if not video_id:
+            return jsonify({'error': 'video_id is required'}), 400
+
+        result = await enhanced_api.get_related_videos(
+            video_id,
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get related videos'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get related videos error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/user/following', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_following_list():
+    """获取用户关注列表"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        result = await enhanced_api.get_following_list(
+            user_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get following list'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get following list error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/user/followers', methods=['POST'])
+@limiter.limit("20 per minute")
+async def get_follower_list():
+    """获取用户粉丝列表"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        result = await enhanced_api.get_follower_list(
+            user_id,
+            cursor=data.get('cursor', 0),
+            count=data.get('count', 20),
+            options=data.get('options')
+        )
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to get follower list'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Get follower list error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 if __name__ == '__main__':

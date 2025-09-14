@@ -35,6 +35,17 @@ class CacheManager:
             'sets': 0,
             'deletes': 0
         }
+        self.memory_cache = {}  # 内存缓存作为后备
+        self.use_memory_cache = False
+
+        # 测试Redis连接
+        try:
+            if self.redis:
+                self.redis.ping()
+                logger.info("Redis连接成功")
+        except Exception as e:
+            logger.warning(f"Redis连接失败，使用内存缓存: {e}")
+            self.use_memory_cache = True
 
     def _make_key(self, key: str) -> str:
         """生成缓存键"""
@@ -54,6 +65,23 @@ class CacheManager:
         Returns:
             缓存值，如果不存在返回None
         """
+        # 如果使用内存缓存
+        if self.use_memory_cache:
+            cache_key = self._make_key(key)
+            if cache_key in self.memory_cache:
+                cache_data = self.memory_cache[cache_key]
+                # 检查是否过期
+                if time.time() - cache_data['cached_at'] < cache_data['ttl']:
+                    self.stats['hits'] += 1
+                    logger.debug(f"Memory cache hit: {key}")
+                    return cache_data['value']
+                else:
+                    # 过期了，删除
+                    del self.memory_cache[cache_key]
+            self.stats['misses'] += 1
+            return None
+
+        # 使用Redis
         try:
             cache_key = self._make_key(key)
             value = self.redis.get(cache_key)
@@ -61,7 +89,11 @@ class CacheManager:
             if value:
                 self.stats['hits'] += 1
                 logger.debug(f"Cache hit: {key}")
-                return json.loads(value)
+                cache_data = json.loads(value)
+                # 兼容旧格式
+                if isinstance(cache_data, dict) and 'value' in cache_data:
+                    return cache_data['value']
+                return cache_data
             else:
                 self.stats['misses'] += 1
                 logger.debug(f"Cache miss: {key}")
@@ -69,7 +101,9 @@ class CacheManager:
 
         except Exception as e:
             logger.error(f"Cache get error: {e}")
-            return None
+            # 尝试使用内存缓存
+            self.use_memory_cache = True
+            return self.get(key)
 
     def set(self, key: str, value: Any, ttl: int = None) -> bool:
         """
@@ -83,17 +117,27 @@ class CacheManager:
         Returns:
             是否设置成功
         """
+        cache_key = self._make_key(key)
+        ttl = ttl or self.default_ttl
+
+        # 添加元数据
+        cache_data = {
+            'value': value,
+            'cached_at': time.time(),
+            'ttl': ttl
+        }
+
+        # 如果使用内存缓存
+        if self.use_memory_cache:
+            self.memory_cache[cache_key] = cache_data
+            self.stats['sets'] += 1
+            logger.debug(f"Memory cache set: {key} (TTL: {ttl}s)")
+            # 清理过期的缓存
+            self._cleanup_memory_cache()
+            return True
+
+        # 使用Redis
         try:
-            cache_key = self._make_key(key)
-            ttl = ttl or self.default_ttl
-
-            # 添加元数据
-            cache_data = {
-                'value': value,
-                'cached_at': time.time(),
-                'ttl': ttl
-            }
-
             self.redis.setex(
                 cache_key,
                 ttl,
@@ -106,7 +150,9 @@ class CacheManager:
 
         except Exception as e:
             logger.error(f"Cache set error: {e}")
-            return False
+            # 切换到内存缓存
+            self.use_memory_cache = True
+            return self.set(key, value, ttl)
 
     def delete(self, key: str) -> bool:
         """
@@ -250,3 +296,25 @@ class CacheManager:
                 logger.error(f"Cache warmup error for {url}: {e}")
 
         return success_count
+
+    def _cleanup_memory_cache(self):
+        """
+        清理过期的内存缓存
+        """
+        if len(self.memory_cache) > 1000:  # 限制最大1000个缓存项
+            current_time = time.time()
+            expired_keys = [
+                k for k, v in self.memory_cache.items()
+                if current_time - v['cached_at'] > v['ttl']
+            ]
+            for k in expired_keys:
+                del self.memory_cache[k]
+
+            # 如果还是太多，删除最旧的
+            if len(self.memory_cache) > 800:
+                sorted_items = sorted(
+                    self.memory_cache.items(),
+                    key=lambda x: x[1]['cached_at']
+                )
+                for k, _ in sorted_items[:200]:
+                    del self.memory_cache[k]
