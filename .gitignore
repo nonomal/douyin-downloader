@@ -161,5 +161,7 @@ cython_debug/
 *.db
 config.yml
 Downloaded
-test_download/
 cookies.pkl
+config_douyin.yml
+config_downloader.yml
+cookies.txt
