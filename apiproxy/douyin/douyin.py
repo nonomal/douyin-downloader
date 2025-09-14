@@ -7,11 +7,28 @@ import requests
 import json
 import time
 import copy
+import gzip
+import zlib
 # from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import Tuple, Optional
 from requests.exceptions import RequestException
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
+
+# 尝试导入 brotli - 延迟导入以避免启动时的问题
+HAS_BROTLI = False
+brotli = None
+
+def _ensure_brotli():
+    global HAS_BROTLI, brotli
+    if not HAS_BROTLI:
+        try:
+            import brotli as _brotli
+            brotli = _brotli
+            HAS_BROTLI = True
+        except ImportError:
+            HAS_BROTLI = False
+    return HAS_BROTLI
 
 from apiproxy.douyin import douyin_headers
 from apiproxy.douyin.urls import Urls
@@ -295,19 +312,38 @@ class Douyin(object):
                         self.console.print("[red]❌ 模式选择错误，仅支持post、like[/]")
                         return None
 
-                    # 发送请求
-                    res = requests.get(url=url, headers=douyin_headers, timeout=10)
+                    # 发送请求，告诉服务器我们不接受 br 编码
+                    headers_no_br = douyin_headers.copy()
+                    # 移除 br 编码支持，只接受 gzip 和 deflate
+                    headers_no_br['Accept-Encoding'] = 'gzip, deflate'
+
+                    res = requests.get(url=url, headers=headers_no_br, timeout=10)
 
                     # 检查HTTP状态码
                     if res.status_code != 200:
                         self.console.print(f"[red]❌ HTTP请求失败: {res.status_code}[/]")
                         break
 
+                    # requests 会自动处理 gzip 和 deflate 压缩
+                    # 直接获取解压后的文本
+                    response_text = res.text
+
+                    # 检查响应是否为空
+                    if not response_text or not response_text.strip():
+                        self.console.print(f"[red]❌ 响应内容为空[/]")
+                        self.console.print(f"[yellow]🔍 请求URL: {url}[/]")
+                        self.console.print(f"[yellow]🔍 模式: {mode}[/]")
+                        self.console.print(f"[yellow]💡 可能的原因:[/]")
+                        self.console.print(f"[yellow]   1. X-Bogus参数生成错误[/]")
+                        self.console.print(f"[yellow]   2. 需要登录Cookie[/]")
+                        self.console.print(f"[yellow]   3. 用户{mode}列表不公开[/]")
+                        break
+
                     try:
-                        datadict = json.loads(res.text)
+                        datadict = json.loads(response_text)
                     except json.JSONDecodeError as e:
                         self.console.print(f"[red]❌ JSON解析失败: {str(e)}[/]")
-                        self.console.print(f"[yellow]🔍 响应内容: {res.text[:500]}...[/]")
+                        self.console.print(f"[yellow]🔍 响应内容: {response_text[:500] if response_text else '(empty)'}...[/]")
                         self.console.print(f"[yellow]🔍 请求URL: {url}[/]")
                         self.console.print(f"[yellow]🔍 模式: {mode}[/]")
 

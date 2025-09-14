@@ -45,6 +45,7 @@ from apiproxy.common.utils import Utils
 from apiproxy.douyin.auth.cookie_manager import AutoCookieManager
 from apiproxy.douyin.auth.signature_generator import get_x_bogus, get_a_bogus
 from apiproxy.douyin.database import DataBase
+from apiproxy.douyin.core.download_logger import DownloadLogger
 
 # 配置日志 - 只记录到文件，不输出到控制台
 logging.basicConfig(
@@ -182,6 +183,9 @@ class UnifiedDownloader:
         # 保存路径
         self.save_path = Path(self.config.get('path', './Downloaded'))
         self.save_path.mkdir(parents=True, exist_ok=True)
+
+        # 初始化下载日志记录器
+        self.download_logger = DownloadLogger(str(self.save_path))
         
     def _load_config(self, config_path: str) -> Dict:
         """加载配置文件"""
@@ -561,6 +565,7 @@ class UnifiedDownloader:
     
     async def download_single_video(self, url: str, progress=None, task_id=None) -> bool:
         """下载单个视频/图文"""
+        start_time = time.time()  # 记录开始时间
         try:
             # 解析短链接
             url = await self.resolve_short_url(url)
@@ -608,15 +613,37 @@ class UnifiedDownloader:
             if success:
                 self.stats.success += 1
                 logger.debug(f"下载成功: {url}")
+                # 记录成功的下载
+                self.download_logger.add_success({
+                    "url": url,
+                    "title": video_info.get('desc', '无标题'),
+                    "video_id": video_id,
+                    "file_path": str(self.save_path),
+                    "download_time": time.time() - start_time if 'start_time' in locals() else 0
+                })
             else:
                 self.stats.failed += 1
                 logger.error(f"下载失败: {url}")
+                # 记录失败的下载
+                self.download_logger.add_failure({
+                    "url": url,
+                    "title": video_info.get('desc', '无标题') if video_info else '无法获取标题',
+                    "video_id": video_id,
+                    "error_message": "下载媒体文件失败"
+                })
 
             return success
 
         except Exception as e:
             logger.error(f"下载视频异常 {url}: {e}")
             self.stats.failed += 1
+            # 记录异常的下载
+            self.download_logger.add_failure({
+                "url": url,
+                "video_id": video_id if 'video_id' in locals() else '',
+                "error_message": str(e),
+                "error_type": "异常"
+            })
             return False
         finally:
             self.stats.total += 1
@@ -2213,6 +2240,7 @@ def main():
         config_path = args.config
     
     # 运行下载器
+    downloader = None
     try:
         downloader = UnifiedDownloader(config_path)
         asyncio.run(downloader.run())
@@ -2222,6 +2250,10 @@ def main():
         console.print(f"\n[red]❌ 程序异常: {e}[/red]")
         logger.exception("程序异常")
     finally:
+        # 输出最终统计并保存日志
+        if downloader and hasattr(downloader, 'download_logger'):
+            downloader.download_logger.finalize(time.time() - downloader.stats.start_time)
+
         # 清理临时配置
         if args.url and os.path.exists('temp_config.yml'):
             os.remove('temp_config.yml')
