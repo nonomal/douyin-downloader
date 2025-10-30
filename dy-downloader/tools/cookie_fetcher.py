@@ -69,7 +69,15 @@ async def capture_cookies(args: argparse.Namespace) -> int:
         print("[INFO] Browser launched. Please complete Douyin login in the opened window.")
         print("[INFO] Press Enter in this terminal once the homepage shows you are logged in.")
 
-        await page.goto(args.url, wait_until="networkidle")
+        try:
+            # Use domcontentloaded instead of networkidle to avoid timeout issues
+            # Douyin may have continuous background requests
+            await page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"[WARN] Page loading encountered an issue: {e}")
+            print("[INFO] This is usually fine - the page should still be usable.")
+            print("[INFO] Please proceed with login if the browser window opened.")
+        
         await asyncio.to_thread(input)
 
         storage = await context.storage_state()

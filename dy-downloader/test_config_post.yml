@@ -1,0 +1,27 @@
+link:
+  - https://www.douyin.com/user/MS4wLjABAAAA6O7EZyfDRYXxJrUTpf91K3tmB4rBROkAw-nYMfld8ss
+
+path: ./Downloaded/
+
+music: true
+cover: true
+avatar: true
+json: true
+
+mode:
+  - post
+
+number:
+  post: 2  # 测试下载2个视频
+
+thread: 3
+retry_times: 3
+database: true
+
+cookies:
+  passport_csrf_token: 29dc8046cb9f863378a8e993cbb4b24f
+  odin_tt: 767a5e3c8c59e6ec9d3e9814a2cb87e4ad0eec87c96a80eefce23c8c673bacc4ab97d4ef2dd1b5c6bce3408a16da4a06
+  sid_guard: 36de90bbbe1bba70fa6295d2b1d9b9f0%7C1760711604%7C5184000%7CTue%2C+16-Dec-2025+14%3A33%3A24+GMT
+  sid_tt: 36de90bbbe1bba70fa6295d2b1d9b9f0
+  sessionid: 36de90bbbe1bba70fa6295d2b1d9b9f0
+  ttwid: 1%7CBCz_tJrOMumUaBdpcFY4p3-p9ZuQADa-sqMZWP8LZhg%7C1760711611%7C66c1eac526fad22842351c9905a30d4a182a1675c387ec312c965f7affdd5cbc

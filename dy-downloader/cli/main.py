@@ -10,9 +10,10 @@ from storage import Database, FileManager
 from control import QueueManager, RateLimiter, RetryHandler
 from core import DouyinAPIClient, URLParser, DownloaderFactory
 from cli.progress_display import ProgressDisplay
-from utils.logger import setup_logger
+from utils.logger import setup_logger, set_global_log_level, get_log_level_from_string
 
-logger = setup_logger('CLI')
+# Logger will be initialized after config is loaded
+logger = None
 display = ProgressDisplay()
 
 
@@ -71,6 +72,7 @@ async def download_url(url: str, config: ConfigLoader, cookie_manager: CookieMan
 
 
 async def main_async(args):
+    global logger
     display.show_banner()
 
     if args.config:
@@ -83,6 +85,13 @@ async def main_async(args):
         return
 
     config = ConfigLoader(config_path)
+    
+    # Configure logging based on config file
+    log_level_str = config.get('log_level', 'INFO')
+    log_level = get_log_level_from_string(log_level_str)
+    set_global_log_level(log_level)
+    log_file = config.get('log_file')
+    logger = setup_logger('CLI', level=log_level, log_file=log_file)
 
     if args.url:
         urls = args.url if isinstance(args.url, list) else [args.url]
@@ -151,13 +160,15 @@ def main():
 
     try:
         asyncio.run(main_async(args))
+        return 0
     except KeyboardInterrupt:
         display.print_warning("\nDownload interrupted by user")
-        sys.exit(0)
+        return 0
     except Exception as e:
         display.print_error(f"Fatal error: {e}")
-        logger.exception("Fatal error occurred")
-        sys.exit(1)
+        if logger:
+            logger.exception("Fatal error occurred")
+        return 1
 
 
 if __name__ == '__main__':

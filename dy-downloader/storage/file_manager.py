@@ -1,3 +1,4 @@
+import asyncio
 import aiofiles
 import aiohttp
 from pathlib import Path
@@ -35,7 +36,21 @@ class FileManager:
         save_path: Path,
         session: aiohttp.ClientSession = None,
         headers: Optional[Dict[str, str]] = None,
+        timeout: int = 300,
     ) -> bool:
+        """
+        Download a file from URL to save_path.
+        
+        Args:
+            url: URL to download from
+            save_path: Path to save the file
+            session: Optional aiohttp session to reuse
+            headers: Optional headers for the request
+            timeout: Download timeout in seconds
+            
+        Returns:
+            True if download succeeded, False otherwise
+        """
         should_close = False
         if session is None:
             default_headers = headers or {
@@ -50,19 +65,29 @@ class FileManager:
         try:
             async with session.get(
                 url,
-                timeout=aiohttp.ClientTimeout(total=300),
+                timeout=aiohttp.ClientTimeout(total=timeout),
                 headers=headers,
             ) as response:
                 if response.status == 200:
+                    # Ensure parent directory exists
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    
                     async with aiofiles.open(save_path, 'wb') as f:
                         async for chunk in response.content.iter_chunked(8192):
                             await f.write(chunk)
+                    logger.debug(f"Downloaded: {save_path.name}")
                     return True
                 else:
                     logger.error(f"Download failed: {url}, status: {response.status}")
                     return False
+        except asyncio.TimeoutError:
+            logger.error(f"Download timeout after {timeout}s: {url}")
+            return False
+        except aiohttp.ClientError as e:
+            logger.error(f"Download client error: {url}, error: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Download error: {url}, error: {e}")
+            logger.error(f"Download unexpected error: {url}, error: {e}")
             return False
         finally:
             if should_close:

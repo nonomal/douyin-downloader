@@ -28,4 +28,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'retry_times': 3,
     'database': True,
     'auto_cookie': False,
+    'log_level': 'INFO',  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    'log_file': None,  # Optional log file path
+    'download_timeout': 300,  # Download timeout in seconds
+    'filename_max_length': 200,  # Maximum filename length
 }

@@ -80,16 +80,22 @@ class BaseDownloader(ABC):
             create_time = aweme.get('create_time', 0)
 
             if start_time:
-                from datetime import datetime
-                start_ts = int(datetime.strptime(start_time, '%Y-%m-%d').timestamp())
-                if create_time < start_ts:
-                    continue
+                try:
+                    from datetime import datetime
+                    start_ts = int(datetime.strptime(start_time, '%Y-%m-%d').timestamp())
+                    if create_time < start_ts:
+                        continue
+                except ValueError as e:
+                    logger.warning(f"Invalid start_time format: {start_time}, expected YYYY-MM-DD. Error: {e}")
 
             if end_time:
-                from datetime import datetime
-                end_ts = int(datetime.strptime(end_time, '%Y-%m-%d').timestamp())
-                if create_time > end_ts:
-                    continue
+                try:
+                    from datetime import datetime
+                    end_ts = int(datetime.strptime(end_time, '%Y-%m-%d').timestamp())
+                    if create_time > end_ts:
+                        continue
+                except ValueError as e:
+                    logger.warning(f"Invalid end_time format: {end_time}, expected YYYY-MM-DD. Error: {e}")
 
             filtered.append(aweme)
 
@@ -115,7 +121,8 @@ class BaseDownloader(ABC):
             return False
 
         desc = aweme_data.get('desc', 'no_title')
-        safe_title = sanitize_filename(desc)
+        max_length = self.config.get('filename_max_length', 200)
+        safe_title = sanitize_filename(desc, max_length=max_length)
 
         save_dir = self.file_manager.get_save_path(
             author_name=author_name,

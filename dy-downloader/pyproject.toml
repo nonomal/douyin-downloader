@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dy-downloader"
+version = "1.0.0"
+description = "抖音批量下载工具 - Douyin Batch Downloader"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "dy-downloader contributors"}
+]
+keywords = ["douyin", "downloader", "video", "tiktok", "crawler"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Multimedia :: Video",
+]
+
+dependencies = [
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.2.1",
+    "aiosqlite>=0.19.0",
+    "rich>=13.7.0",
+    "pyyaml>=6.0.1",
+    "python-dateutil>=2.8.2",
+]
+
+[project.optional-dependencies]
+playwright = [
+    "playwright>=1.40.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+all = [
+    "playwright>=1.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/dy-downloader"
+Documentation = "https://github.com/yourusername/dy-downloader#readme"
+Repository = "https://github.com/yourusername/dy-downloader"
+Issues = "https://github.com/yourusername/dy-downloader/issues"
+
+[project.scripts]
+dy-downloader = "cli.main:main"
+dy-dl = "cli.main:main"
+
+[tool.setuptools]
+packages = ["auth", "cli", "config", "control", "core", "storage", "tools", "utils", "tests"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yml", "*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 120
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
